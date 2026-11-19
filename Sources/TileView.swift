@@ -117,6 +117,7 @@ final class TileView: NSView {
 
         videoView.player = player
         player.attach(videoView)
+        player.muted = Prefs.startMuted
         player.onPlaylistChanged = { [weak self] in self?.playlistView.reload() }
         player.onItemChanged = { [weak self] in self?.videoView.resetZoom() }
         player.onStartedPlaying = { [weak self] in self?.videoView.reapplyCrop() }

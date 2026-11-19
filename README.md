@@ -44,9 +44,17 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 
 ### File browser sidebar
 - **Folder list:** a Finder-style list of your folders and videos. Start from Movies, Downloads, Desktop, an external drive, or any folder you choose.
+- **Names or thumbnails:** show files as plain names, small thumbnails beside the names, or large thumbnails that fill the sidebar's width. Thumbnails work for every format, including MKV, AVI, and WebM, which Finder can't preview; they're grabbed with VLC and cached so they appear instantly next time.
 - **Drag** videos onto any tile or its playlist, or **double-click** one to play it on the selected tile.
 - **Right-click** a video for **Play on Screen ▸** or **Add to Screen's Playlist ▸**. While that menu is open, every tile shows its screen number in large type, and the one you point at lights up.
 - **Placement:** put the sidebar on the left or the right, drag its edge to resize it, or hide it with ⌃⌘S or the title-bar button.
+
+### Settings
+*Video Grid → Settings…* (⌘,) lets you choose:
+- whether the app asks for a layout at launch or reopens the last one you used
+- dark, light, or system appearance
+- whether each video shows its number and file name, and whether new screens start muted
+- how the file browser shows files, which side it sits on, the folder it starts in, and whether new windows show it
 
 ### Whole-window keys
 | Key | Action |
@@ -59,6 +67,7 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 | ⌥⌘4 / ⌥⌘6 / ⌥⌘9 | Switch to 2×2 / 3×2 / 3×3 |
 | ⇧⌘L | Custom layout |
 | ⌘O | Add files to the selected tile |
+| ⌘, | Settings |
 
 *Help → Video Grid Shortcuts* lists every key.
 
@@ -76,7 +85,7 @@ Skip the layout picker and start playing right away:
 
 ## Install
 
-Download **Video Grid.dmg** from [Releases](https://github.com/labalicious/videogrid/releases), open it, and drag **Video Grid** to Applications. It is signed and notarized by Apple, so it opens without security warnings.
+Download **Video Grid.dmg** from [Releases](https://github.com/labalicious/videogrid/releases) and open it. In the window that appears, drag **Video Grid** onto the **Applications** folder. It is signed and notarized by Apple, so it opens without security warnings.
 
 ## Build from source
 
@@ -98,7 +107,7 @@ xcrun notarytool store-credentials videogrid-notary --apple-id YOUR_APPLE_ID --t
 
 `SIGN_ID=- ./build.sh dist` tests the signing and packaging steps without a certificate.
 
-The app icon is drawn in code by `Tools/make-icon.swift`. Run `swift Tools/make-icon.swift` to regenerate `Resources/AppIcon.icns`.
+The app icon is drawn in code by `Tools/make-icon.swift`, and the installer window's background (the pink arrow to Applications) by `Tools/make-dmg-background.swift`. Run either with `swift Tools/<name>.swift` to regenerate `Resources/AppIcon.icns` or `Resources/dmg-background.tiff`. `./build.sh dist` asks Finder to arrange the installer window, so the first run asks permission for your terminal to control Finder.
 
 ## How it's built
 
@@ -111,10 +120,14 @@ The app is written in Swift and AppKit and talks to libVLC 3 through its C API. 
 | `Sources/TileView.swift`, `PlaylistView.swift` | Per-tile controls, the playlist, and the A-B popover. |
 | `Sources/LayoutTree.swift` | Turns a pattern like `XOO/XOO` into nested splits so each dividing line drags on its own. |
 | `Sources/GridWindowController.swift` | The grid, its draggable lines, the sidebar, and the window-wide keys. |
-| `Sources/FileBrowserView.swift` | The file browser sidebar and its Play on Screen menu. |
+| `Sources/FileBrowserView.swift` | The file browser sidebar, its names/thumbnails views, and its Play on Screen menu. |
+| `Sources/Thumbnails.swift` | Video thumbnails: Quick Look first, then a frame grabbed by libVLC, cached on disk. |
+| `Sources/Settings.swift` | The preferences and the Settings window. |
 | `Sources/LayoutPicker.swift`, `Support.swift` | The layout picker and pattern parsing. |
 | `Sources/DebugHarness.swift` | Test-only (`DEBUG=1 ./build.sh`): drives the app and saves pictures of the window. |
 
 ## Credits
+
+Made by Kevin Dimond. And built with ❤️ from Claude Code.
 
 Playback is by [libVLC](https://www.videolan.org/vlc/libvlc.html) from VideoLAN. libVLC and its plugins are licensed under the LGPL/GPL, and their source code is available at [videolan.org](https://www.videolan.org).

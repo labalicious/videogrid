@@ -550,7 +550,7 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     /// Tag 0: left, 1: right. Applies to every window.
     @objc func setFileBrowserSide(_ sender: NSMenuItem) {
-        UserDefaults.standard.set(sender.tag == 1, forKey: Self.browserOnRightKey)
+        Prefs.browserOnRight = sender.tag == 1
         NotificationCenter.default.post(name: Self.browserSideChanged, object: nil)
     }
 
@@ -590,8 +590,7 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     @objc func zoomOutSelected(_ sender: Any?) { selected?.videoView.zoom(by: 0.8) }
 
     @objc func toggleTitles(_ sender: Any?) {
-        TileView.showTitles.toggle()
-        UserDefaults.standard.set(TileView.showTitles, forKey: "showTitles")
+        Prefs.showTitles.toggle()
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {

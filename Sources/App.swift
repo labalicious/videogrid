@@ -6,7 +6,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingURLs: [URL] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.appearance = NSAppearance(named: .darkAqua)
+        Prefs.applyLook()
         NSApp.mainMenu = MainMenu.build()
         guard VLC.shared.instance != nil else {
             let alert = NSAlert()
@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DebugHarness.run(g, outDir: dir)
             }
             #endif
+        } else if Prefs.launch == .lastLayout, let saved = Prefs.lastLayout,
+                  let layout = try? GridLayout.parse(saved) {
+            openGrid(layout)
         } else {
             showPicker()
         }
@@ -70,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func openGrid(_ layout: GridLayout) {
+        Prefs.lastLayout = layout.pattern
         let grid = GridWindowController(layout: layout)
         grid.onClose = { [weak self, weak grid] in self?.grids.removeAll { $0 === grid } }
         grids.append(grid)
@@ -82,12 +86,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func newGridWindow(_ sender: Any?) { showPicker() }
 
+    static let repoURL = URL(string: "https://github.com/labalicious/videogrid")!
+
     @objc func showAbout(_ sender: Any?) {
+        let center = NSMutableParagraphStyle()
+        center.alignment = .center
+        center.paragraphSpacing = 6
+        let body: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.labelColor, .paragraphStyle: center]
+        let small: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: center]
+        let credits = NSMutableAttributedString()
+        credits.append(NSAttributedString(string: "Several videos side by side in one window.\n", attributes: body))
+        credits.append(NSAttributedString(string: "By Kevin Dimond\n", attributes: body.merging(
+            [.font: NSFont.systemFont(ofSize: 11, weight: .semibold)]) { $1 }))
+        credits.append(NSAttributedString(string: "github.com/labalicious/videogrid\n", attributes: body.merging(
+            [.link: Self.repoURL]) { $1 }))
+        credits.append(NSAttributedString(string: "And built with ❤️ from Claude Code\n", attributes: body.merging(
+            [.font: NSFontManager.shared.convert(.systemFont(ofSize: 11), toHaveTrait: .italicFontMask)]) { $1 }))
+        credits.append(NSAttributedString(string: "Playback by libVLC \(VLC.shared.version) from VideoLAN (LGPL/GPL, source at videolan.org).",
+                                          attributes: small))
         NSApp.orderFrontStandardAboutPanel(options: [
-            .credits: NSAttributedString(string: "Several video players in one window.\nPlayback by libVLC \(VLC.shared.version) from VideoLAN (LGPL/GPL, source at videolan.org).",
-                                         attributes: [.foregroundColor: NSColor.labelColor]),
+            .credits: credits,
         ])
     }
+
+    @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.showWindow(nil) }
+    @objc func openRepo(_ sender: Any?) { NSWorkspace.shared.open(Self.repoURL) }
 
     @objc func showShortcuts(_ sender: Any?) {
         let alert = NSAlert()
@@ -136,6 +161,8 @@ enum MainMenu {
 
         let app = submenu(in: main, "Video Grid")
         app.addItem(withTitle: "About Video Grid", action: #selector(AppDelegate.showAbout(_:)), keyEquivalent: "")
+        app.addItem(.separator())
+        app.addItem(withTitle: "Settings…", action: #selector(AppDelegate.showSettings(_:)), keyEquivalent: ",")
         app.addItem(.separator())
         app.addItem(withTitle: "Hide Video Grid", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.addItem(withTitle: "Hide Others", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
@@ -216,6 +243,7 @@ enum MainMenu {
 
         let help = submenu(in: main, "Help")
         help.addItem(withTitle: "Video Grid Shortcuts", action: #selector(AppDelegate.showShortcuts(_:)), keyEquivalent: "/")
+        help.addItem(withTitle: "Video Grid on GitHub", action: #selector(AppDelegate.openRepo(_:)), keyEquivalent: "")
         NSApp.helpMenu = help
 
         return main

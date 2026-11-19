@@ -11,6 +11,8 @@ enum DebugHarness {
             DispatchQueue.main.asyncAfter(deadline: .now() + t) { MainActor.assumeIsolated { f() } }
         }
         func shot(_ name: String) {
+            grid.window?.contentView?.layoutSubtreeIfNeeded()
+            grid.window?.display()
             guard let w = grid.window, let img = capture(windowID: CGWindowID(w.windowNumber)) else {
                 print("DEBUG shot \(name): capture failed"); return
             }
@@ -19,6 +21,35 @@ enum DebugHarness {
             print("DEBUG shot \(name): \(img.width)x\(img.height)")
         }
         let tiles = grid.tiles
+        if ProcessInfo.processInfo.environment["VLCGRID_PREFS"] != nil {
+            let b = grid.debugBrowser
+            if let f = ProcessInfo.processInfo.environment["VLCGRID_FOLDER"] { b.debugShow(folder: URL(fileURLWithPath: f)) }
+            let wasVisible = Prefs.browserVisible
+            grid.debugSetBrowserVisible(true)
+            at(2.0) { print("DEBUG names: \(b.debugCells)"); Prefs.browserStyle = .smallThumbnails }
+            at(9.0) { print("DEBUG small: \(b.debugCells)"); shot("p1-small") }
+            at(9.5) { Prefs.browserStyle = .largeThumbnails }
+            at(11.0) { print("DEBUG large: \(b.debugCells)"); shot("p2-large") }
+            at(11.5) {
+                SettingsWindowController.shared.showWindow(nil)
+                print("DEBUG settings size: \(SettingsWindowController.shared.debugContentSize)")
+                (NSApp.delegate as? AppDelegate)?.showAbout(nil)
+            }
+            at(12.5) {
+                for w in NSApp.windows where w.isVisible {
+                    print("DEBUG window: \(w.title.isEmpty ? String(describing: type(of: w)) : w.title) \(Int(w.frame.width))x\(Int(w.frame.height))")
+                    if let img = capture(windowID: CGWindowID(w.windowNumber)) {
+                        let name = w.title.isEmpty ? "about" : w.title.replacingOccurrences(of: " ", with: "-")
+                        try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?
+                            .write(to: URL(fileURLWithPath: outDir).appendingPathComponent("w-\(name).png"))
+                    }
+                }
+                Prefs.browserStyle = .names
+                Prefs.browserVisible = wasVisible
+            }
+            at(13.5) { NSApp.terminate(nil) }
+            return
+        }
         if ProcessInfo.processInfo.environment["VLCGRID_SIDEBAR"] != nil {
             func post(_ type: NSEvent.EventType, _ code: UInt16, _ chars: String, raw: UInt = 0) {
                 let e = NSEvent.keyEvent(with: type, location: .zero,

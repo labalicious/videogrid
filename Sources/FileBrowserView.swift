@@ -52,22 +52,23 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     private let outline = NSOutlineView()
     private let folderPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private var hideButton: NSButton!
+    private let styleButton = NSPopUpButton(frame: .zero, pullsDown: true)
     private var root: FileNode
     private var screenMenus: Set<ObjectIdentifier> = []
+    private var style = Prefs.browserStyle
 
     static let rootKey = "browserRoot"
 
     override init(frame: NSRect) {
-        let saved = UserDefaults.standard.string(forKey: Self.rootKey).map { URL(fileURLWithPath: $0) }
-        let start = saved.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
-            ?? FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
-        root = FileNode(url: start, isFolder: true)
+        root = FileNode(url: Prefs.browserFolder, isFolder: true)
         super.init(frame: frame)
         material = .sidebar
         blendingMode = .behindWindow
         state = .followsWindowActiveState
         buildUI()
         rebuildFolderMenu()
+        rebuildStyleMenu()
+        NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Prefs.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -84,7 +85,13 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
         let up = smallButton("arrow.up", "Enclosing folder", #selector(goUp))
         let refresh = smallButton("arrow.clockwise", "Refresh", #selector(refresh))
         hideButton = smallButton("sidebar.left", "Hide the file browser (⌃⌘S)", #selector(hideClicked))
-        let header = NSStackView(views: [folderPopup, up, refresh, hideButton])
+        styleButton.isBordered = false
+        styleButton.controlSize = .small
+        styleButton.toolTip = "Show files as names or thumbnails"
+        (styleButton.cell as? NSPopUpButtonCell)?.arrowPosition = .noArrow
+        styleButton.setContentHuggingPriority(.required, for: .horizontal)
+        styleButton.widthAnchor.constraint(equalToConstant: 24).isActive = true
+        let header = NSStackView(views: [folderPopup, styleButton, up, refresh, hideButton])
         header.spacing = 4
         header.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 6)
 
@@ -94,7 +101,11 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
         outline.outlineTableColumn = column
         outline.headerView = nil
         outline.style = .sourceList
-        outline.rowSizeStyle = .small
+        outline.rowSizeStyle = .custom
+        outline.intercellSpacing = NSSize(width: 0, height: 2)
+        outline.postsFrameChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(outlineResized),
+                                               name: NSView.frameDidChangeNotification, object: outline)
         outline.allowsMultipleSelection = true
         outline.autoresizesOutlineColumn = false
         outline.columnAutoresizingStyle = .uniformColumnAutoresizingStyle
@@ -152,6 +163,49 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     func setSide(left: Bool) {
         hideButton.image = NSImage(systemSymbolName: left ? "sidebar.left" : "sidebar.right",
                                    accessibilityDescription: "Hide")
+    }
+
+    // MARK: Names or thumbnails
+
+    private func rebuildStyleMenu() {
+        let menu = NSMenu()
+        let top = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        top.image = NSImage(systemSymbolName: style.symbol, accessibilityDescription: "Show files as")?
+            .withSymbolConfiguration(.init(pointSize: 12, weight: .regular))
+        menu.addItem(top)
+        let label = NSMenuItem(title: "Show Files As", action: nil, keyEquivalent: "")
+        label.isEnabled = false
+        menu.addItem(label)
+        for (i, s) in Prefs.BrowserStyle.allCases.enumerated() {
+            let item = NSMenuItem(title: s.title, action: #selector(styleChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            item.state = s == style ? .on : .off
+            item.image = NSImage(systemSymbolName: s.symbol, accessibilityDescription: nil)
+            menu.addItem(item)
+        }
+        styleButton.menu = menu
+    }
+
+    @objc private func styleChosen(_ sender: NSMenuItem) {
+        Prefs.browserStyle = Prefs.BrowserStyle.allCases[sender.tag]     // every window follows
+    }
+
+    @objc private func prefsChanged() {
+        guard Prefs.browserStyle != style else { return }
+        style = Prefs.browserStyle
+        rebuildStyleMenu()
+        let selection = outline.selectedRowIndexes
+        outline.reloadData()
+        outline.selectRowIndexes(selection, byExtendingSelection: false)
+    }
+
+    @objc private func outlineResized() {
+        guard style == .largeThumbnails, outline.numberOfRows > 0 else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            outline.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<outline.numberOfRows))
+        }
     }
 
     // MARK: Folders
@@ -220,6 +274,7 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
             n.forget()
         }
         forgetAll(root)
+        Thumbnails.shared.forgetFailures()
         outline.reloadData()
     }
 
@@ -241,35 +296,26 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         guard let node = item as? FileNode else { return nil }
-        let id = NSUserInterfaceItemIdentifier("cell")
-        let cell = outlineView.makeView(withIdentifier: id, owner: self) as? NSTableCellView ?? {
-            let c = NSTableCellView()
+        let id = NSUserInterfaceItemIdentifier("file")
+        let cell = outlineView.makeView(withIdentifier: id, owner: self) as? FileCell ?? {
+            let c = FileCell()
             c.identifier = id
-            let image = NSImageView()
-            let text = NSTextField(labelWithString: "")
-            text.lineBreakMode = .byTruncatingMiddle
-            text.font = .systemFont(ofSize: 12)
-            for v in [image, text] as [NSView] {
-                v.translatesAutoresizingMaskIntoConstraints = false
-                c.addSubview(v)
-            }
-            NSLayoutConstraint.activate([
-                image.leadingAnchor.constraint(equalTo: c.leadingAnchor, constant: 2),
-                image.centerYAnchor.constraint(equalTo: c.centerYAnchor),
-                image.widthAnchor.constraint(equalToConstant: 16),
-                image.heightAnchor.constraint(equalToConstant: 16),
-                text.leadingAnchor.constraint(equalTo: image.trailingAnchor, constant: 5),
-                text.trailingAnchor.constraint(equalTo: c.trailingAnchor, constant: -2),
-                text.centerYAnchor.constraint(equalTo: c.centerYAnchor),
-            ])
-            c.imageView = image
-            c.textField = text
             return c
         }()
-        cell.textField?.stringValue = node.url.lastPathComponent
-        cell.imageView?.image = NSWorkspace.shared.icon(forFile: node.url.path)
-        cell.toolTip = node.url.path
+        cell.show(node, style: node.isFolder ? .names : style)
         return cell
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
+        guard let node = item as? FileNode, !node.isFolder else { return 22 }
+        switch style {
+        case .names: return 22
+        case .smallThumbnails: return 46
+        case .largeThumbnails:
+            let level = CGFloat(outline.level(forItem: node))
+            let width = max(80, outline.bounds.width - outline.indentationPerLevel * level - 26)
+            return (width * 9 / 16).rounded() + 24
+        }
     }
 
     func outlineViewItemDidCollapse(_ notification: Notification) {
@@ -370,6 +416,14 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     #if VLCGRID_DEBUG
     func menu(forDebug: Void) -> NSMenu? { outline.menu }
     var debugRowCount: Int { outline.numberOfRows }
+    /// Shows a folder without saving it as the browser's folder.
+    func debugShow(folder: URL) { root = FileNode(url: folder, isFolder: true); outline.reloadData() }
+    var debugCells: [String] {
+        (0..<outline.numberOfRows).compactMap { r in
+            guard let c = outline.view(atColumn: 0, row: r, makeIfNecessary: false) as? FileCell else { return nil }
+            return "\(c.textField?.stringValue ?? "?") h\(Int(outline.rect(ofRow: r).height)) thumb:\(c.debugHasThumbnail)"
+        }
+    }
     func debugExpandFirstFolder() {
         if let n = root.children.first(where: \.isFolder) { outline.expandItem(n) }
     }
@@ -390,4 +444,85 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
 private final class ScreenTarget: NSObject {
     let urls: [URL], index: Int, play: Bool
     init(urls: [URL], index: Int, play: Bool) { self.urls = urls; self.index = index; self.play = play }
+}
+
+/// One row of the browser: an icon and name, or a video thumbnail and name.
+final class FileCell: NSTableCellView {
+    private let picture = NSImageView()
+    private let name = NSTextField(labelWithString: "")
+    private var url: URL?
+    private var style = Prefs.BrowserStyle.names
+    private var hasThumbnail = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        picture.imageScaling = .scaleProportionallyUpOrDown
+        picture.wantsLayer = true
+        picture.layer?.cornerRadius = 4
+        picture.layer?.masksToBounds = true
+        name.lineBreakMode = .byTruncatingMiddle
+        name.font = .systemFont(ofSize: 12)
+        addSubview(picture)
+        addSubview(name)
+        imageView = picture
+        textField = name
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func show(_ node: FileNode, style: Prefs.BrowserStyle) {
+        self.style = style
+        url = node.url
+        name.stringValue = node.url.lastPathComponent
+        toolTip = node.url.path
+        name.maximumNumberOfLines = style == .smallThumbnails ? 2 : 1
+        name.cell?.wraps = style == .smallThumbnails
+        name.lineBreakMode = style == .smallThumbnails ? .byWordWrapping : .byTruncatingMiddle
+        name.cell?.truncatesLastVisibleLine = true
+        hasThumbnail = false
+        if style != .names, let img = Thumbnails.shared.cached(node.url) {
+            setThumbnail(img)
+        } else {
+            picture.image = NSWorkspace.shared.icon(forFile: node.url.path)
+            picture.layer?.backgroundColor = nil
+            if style != .names {
+                let wanted = node.url
+                Thumbnails.shared.thumbnail(for: wanted) { [weak self] img in
+                    guard let self, self.url == wanted, self.style != .names, let img else { return }
+                    self.setThumbnail(img)
+                }
+            }
+        }
+        needsLayout = true
+    }
+
+    #if VLCGRID_DEBUG
+    var debugHasThumbnail: Bool { hasThumbnail }
+    #endif
+
+    private func setThumbnail(_ img: NSImage) {
+        picture.image = img
+        picture.layer?.backgroundColor = NSColor.black.cgColor
+        hasThumbnail = true
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let b = bounds
+        switch style {
+        case .names:
+            picture.frame = NSRect(x: 2, y: (b.height - 16) / 2, width: 16, height: 16)
+            name.frame = NSRect(x: 23, y: (b.height - 16) / 2, width: max(0, b.width - 25), height: 16)
+        case .smallThumbnails:
+            let thumb = NSRect(x: 2, y: (b.height - 40) / 2, width: 71, height: 40)
+            picture.frame = hasThumbnail ? thumb : thumb.insetBy(dx: 17, dy: 2)
+            let h = name.sizeThatFits(NSSize(width: b.width - 84, height: 40)).height
+            name.frame = NSRect(x: 80, y: (b.height - min(h, 32)) / 2, width: max(0, b.width - 82), height: min(h, 32))
+        case .largeThumbnails:
+            let thumb = NSRect(x: 2, y: 20, width: b.width - 6, height: b.height - 22)
+            picture.frame = hasThumbnail ? thumb : thumb.insetBy(dx: thumb.width / 2 - 24, dy: thumb.height / 2 - 24)
+            name.frame = NSRect(x: 2, y: 1, width: b.width - 6, height: 16)
+        }
+    }
 }

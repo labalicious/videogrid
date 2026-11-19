@@ -71,14 +71,58 @@ dist)
   codesign --verify --deep --strict "$APP"
   echo "Signature OK"
 
+  # The disk image opens as a small window: the app, a pink arrow, and the Applications folder.
+  # Finder lays the window out (it writes the .DS_Store), so the first run asks to let this
+  # terminal control Finder.
   DMG="build/$NAME.dmg"
   STAGE="build/dmg"
-  rm -rf "$STAGE" "$DMG"
-  mkdir -p "$STAGE"
+  RW="build/$NAME-rw.dmg"
+  rm -rf "$STAGE" "$DMG" "$RW"
+  mkdir -p "$STAGE/.background"
   ditto "$APP" "$STAGE/$NAME.app"
   ln -s /Applications "$STAGE/Applications"
-  hdiutil create -quiet -volname "$NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+  cp Resources/dmg-background.tiff "$STAGE/.background/background.tiff"
+  cp Resources/AppIcon.icns "$STAGE/.VolumeIcon.icns"
+  hdiutil create -quiet -volname "$NAME" -srcfolder "$STAGE" -fs HFS+ -format UDRW -size 400m -ov "$RW"
   rm -rf "$STAGE"
+
+  MNT="$(hdiutil attach -readwrite -noverify -noautoopen "$RW" | awk -F'\t' '/\/Volumes\// {print $NF; exit}')"
+  [[ -d "$MNT" ]] || { echo "Couldn't mount $RW" >&2; exit 1; }
+  SetFile -a C "$MNT"                         # use .VolumeIcon.icns as the disk's icon
+  DISK="${MNT:t}"
+  osascript <<APPLESCRIPT
+tell application "Finder"
+  tell disk "$DISK"
+    open
+    set w to container window
+    set current view of w to icon view
+    set toolbar visible of w to false
+    set statusbar visible of w to false
+    set pathbar visible of w to false
+    set bounds of w to {200, 120, 840, 548}
+    set opts to icon view options of w
+    set arrangement of opts to not arranged
+    set icon size of opts to 128
+    set text size of opts to 13
+    set background picture of opts to file ".background:background.tiff"
+    set position of item "$NAME.app" of w to {160, 190}
+    set position of item "Applications" of w to {480, 190}
+    -- Close and reopen so Finder saves the size; it otherwise widens the window.
+    close
+    open
+    set bounds of container window to {200, 120, 840, 548}
+    update without registering applications
+    delay 2
+    close
+  end tell
+end tell
+APPLESCRIPT
+  chmod -Rf go-w "$MNT" || true
+  rm -rf "$MNT/.fseventsd" "$MNT/.Trashes"
+  sync
+  hdiutil detach -quiet "$MNT" || { sleep 2; hdiutil detach -force -quiet "$MNT"; }
+  hdiutil convert -quiet "$RW" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+  rm -f "$RW"
   codesign --force "${TS[@]}" --sign "$IDENTITY" "$DMG"
 
   if [[ "$IDENTITY" == "-" || "${NOTARIZE:-1}" == "0" ]]; then

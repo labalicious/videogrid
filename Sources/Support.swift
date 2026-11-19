@@ -33,6 +33,9 @@ enum MediaFiles {
         "mp3", "flac", "wav", "aac", "m4a", "ogg", "opus", "aiff", "alac", "wma",
     ]
 
+    static let audioExtensions: Set<String> = ["mp3", "flac", "wav", "aac", "m4a", "ogg", "opus", "aiff", "alac", "wma"]
+    static func isAudio(_ url: URL) -> Bool { audioExtensions.contains(url.pathExtension.lowercased()) }
+
     static func urls(from pasteboard: NSPasteboard) -> [URL] {
         (pasteboard.readObjects(forClasses: [NSURL.self],
                                 options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
