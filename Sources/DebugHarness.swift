@@ -186,4 +186,113 @@ enum DebugHarness {
         return fn(.null, 8, windowID, 1)?.takeRetainedValue()
     }
 }
+
+extension DebugHarness {
+    /// VLCGRID_FEATURES=<dir>: drives two windows through zoom, drop, next, maximize and save.
+    /// VLCGRID_MODE=resume only reports what was restored.
+    static func features(_ app: AppDelegate, outDir: String) {
+        setlinebuf(stdout)
+        func at(_ t: Double, _ f: @escaping () -> Void) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + t) { MainActor.assumeIsolated { f() } }
+        }
+        func report() {
+            for (i, g) in app.debugGrids.enumerated() {
+                print("DEBUG window \(i + 1): '\(g.window!.title)' frame \(NSStringFromRect(g.window!.frame)) browser \(g.debugBrowser.debugRoot)")
+                for t in g.tiles where !t.player.items.isEmpty || t.number == 1 {
+                    print("DEBUG   tile \(t.number): \(t.player.items.map(\.lastPathComponent)) current \(t.player.currentIndex.map { "\($0)" } ?? "-") playing \(t.player.isPlaying) at \(t.player.resumeTime / 1000)s repeat \(t.player.repeatMode.rawValue) random \(t.player.shuffle) muted \(t.player.muted)")
+                }
+            }
+        }
+        /// Mean and spread of the brightness of a tile's picture, from a capture of its window.
+        func picture(_ t: TileView, save name: String? = nil) -> String {
+            guard let w = t.window, let img = capture(windowID: CGWindowID(w.windowNumber)) else { return "no capture" }
+            let scale = CGFloat(img.width) / w.frame.width
+            let r = t.videoView.convert(t.videoView.bounds, to: nil)
+            let crop = CGRect(x: r.minX * scale, y: (w.frame.height - r.maxY) * scale, width: r.width * scale, height: r.height * scale)
+            guard let part = img.cropping(to: crop.integral) else { return "no crop" }
+            let rep = NSBitmapImageRep(cgImage: part)
+            if let name {
+                try? rep.representation(using: .png, properties: [:])?
+                    .write(to: URL(fileURLWithPath: outDir).appendingPathComponent(name + ".png"))
+            }
+            var sum = 0.0, sum2 = 0.0, n = 0.0
+            for y in stride(from: 0, to: rep.pixelsHigh, by: 6) {
+                for x in stride(from: 0, to: rep.pixelsWide, by: 6) {
+                    guard let c = rep.colorAt(x: x, y: y) else { continue }
+                    let l = Double(0.3 * c.redComponent + 0.59 * c.greenComponent + 0.11 * c.blueComponent)
+                    sum += l; sum2 += l * l; n += 1
+                }
+            }
+            let mean = sum / max(n, 1)
+            return String(format: "brightness %.3f spread %.3f", mean, (sum2 / max(n, 1) - mean * mean).squareRoot())
+        }
+        if ProcessInfo.processInfo.environment["VLCGRID_MODE"] == "settings" {
+            let sw = SettingsWindowController.shared
+            for page in 0..<4 {
+                at(1.0 + Double(page)) {
+                    sw.show(page: page)
+                    sw.window?.contentView?.layoutSubtreeIfNeeded()
+                    sw.window?.display()
+                }
+                at(1.6 + Double(page)) {
+                    guard let w = sw.window, let img = capture(windowID: CGWindowID(w.windowNumber)) else { return }
+                    print("DEBUG settings page \(page): \(Int(w.frame.width))x\(Int(w.frame.height))")
+                    try? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])?
+                        .write(to: URL(fileURLWithPath: outDir).appendingPathComponent("settings-\(page).png"))
+                }
+            }
+            at(5.5) { NSApp.terminate(nil) }
+            return
+        }
+        if ProcessInfo.processInfo.environment["VLCGRID_MODE"] == "resume" {
+            at(5) { report(); NSApp.terminate(nil) }
+            return
+        }
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        let files = ((try? FileManager.default.contentsOfDirectory(at: movies, includingPropertiesForKeys: nil)) ?? [])
+            .filter { MediaFiles.extensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.path < $1.path }
+        guard let g = app.debugGrids.first, files.count >= 4 else { print("DEBUG setup missing"); return }
+        let t0 = g.tiles[0]
+        at(1.5) {
+            report()
+            g.tiles.forEach { $0.setMuted(false) }
+            t0.setPlayback(repeat: .all, shuffle: false)
+            t0.playNow([files[0]])
+            g.tiles[1].playNow([files[1]])
+            g.tiles[2].add([files[2]], autoplay: false)
+            app.debugGrids.last?.tiles.first?.playNow([files[3]])
+        }
+        at(5.0) { t0.videoView.setZoom(5, anchor: CGPoint(x: 20, y: 20)) }
+        at(6.5) { print("DEBUG zoomed: \(t0.videoView.zoom)x \(picture(t0))") }
+        // A video of a different size, dropped while the zoomed one plays.
+        let clip = ProcessInfo.processInfo.environment["VLCGRID_CLIP"].map { URL(fileURLWithPath: $0) } ?? files[3]
+        at(7.0) { t0.dropped([clip]) }
+        at(8.5) { print("DEBUG 1.5 s after drop: playing \(t0.player.currentURL?.lastPathComponent ?? "-") zoom \(t0.videoView.zoom)x \(picture(t0, save: "drop-1"))") }
+        at(10.0) {
+            print("DEBUG 3 s after drop: playing \(t0.player.currentURL?.lastPathComponent ?? "-") zoom \(t0.videoView.zoom)x \(picture(t0, save: "drop-2"))")
+            t0.videoView.setZoom(5, anchor: CGPoint(x: 20, y: 20))
+        }
+        at(11.5) { print("DEBUG zoomed again: \(t0.videoView.zoom)x"); t0.player.next() }   // playlist advances
+        at(14.5) {
+            print("DEBUG after next: playing \(t0.player.currentURL?.lastPathComponent ?? "-") zoom \(t0.videoView.zoom)x \(picture(t0))")
+            g.tileRequestsMaximizeToggle(t0)
+            print("DEBUG maximized: muted \(g.tiles.map { $0.player.muted })")
+        }
+        at(15.5) {
+            g.tileRequestsMaximizeToggle(t0)
+            print("DEBUG back to grid: muted \(g.tiles.map { $0.player.muted })")
+        }
+        at(16.5) {
+            g.tiles[1].player.seek(toTime: 42_000)
+        }
+        at(17.5) {
+            report()
+            app.debugSaveSession()
+            let s = SavedSession.load()
+            print("DEBUG saved \(s?.windows.count ?? 0) windows: \(s?.windows.map { "\($0.layout) \($0.tiles.filter { !$0.items.isEmpty }.count) filled" } ?? [])")
+            NSApp.terminate(nil)
+        }
+    }
+}
 #endif

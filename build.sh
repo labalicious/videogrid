@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Builds "Video Grid.app" into ./build.
-#   ./build.sh            build
+#   ./build.sh            build into build/app.noindex/
 #   ./build.sh install    build, then copy to ~/Applications
 #   ./build.sh dist       build, sign with your Developer ID, notarize, and make build/Video Grid.dmg
 #
@@ -21,7 +21,10 @@ NAME="Video Grid"
 EXE="VideoGrid"
 VLC_APP="${VLC_APP:-/Applications/VLC.app}"
 VLC_DIR="$VLC_APP/Contents/MacOS"
-APP="build/$NAME.app"
+# The ".noindex" folder keeps Spotlight and Launchpad from listing this build copy
+# next to the installed one.
+APP="build/app.noindex/$NAME.app"
+rm -rf "build/$NAME.app"                     # where older versions of this script put it
 
 [[ -f "$VLC_DIR/lib/libvlc.dylib" ]] || { echo "VLC.app not found at $VLC_APP" >&2; exit 1; }
 

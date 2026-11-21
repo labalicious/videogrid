@@ -4,6 +4,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var grids: [GridWindowController] = []
     private var picker: LayoutPickerController?
     private var pendingURLs: [URL] = []
+    private var autosave: Timer?
+    private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Prefs.applyLook()
@@ -16,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        StartFolder.reconnectIfNeeded()
         // Command line: VideoGrid --layout XOO/XOO [--play] file1 file2 …  skips the picker.
         let args = Array(CommandLine.arguments.dropFirst())
         if let i = args.firstIndex(of: "--layout"), i + 1 < args.count,
@@ -31,19 +34,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 DebugHarness.run(g, outDir: dir)
             }
             #endif
-        } else if Prefs.launch == .lastLayout, let saved = Prefs.lastLayout,
-                  let layout = try? GridLayout.parse(saved) {
-            openGrid(layout)
         } else {
-            showPicker()
+            switch Prefs.launch {
+            case .resume: if !restoreSession() { openDefaultWindows() }
+            case .defaults: openDefaultWindows()
+            case .ask: showPicker()
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
+        #if VLCGRID_DEBUG
+        if let dir = ProcessInfo.processInfo.environment["VLCGRID_FEATURES"] { DebugHarness.features(self, outDir: dir) }
+        #endif
+        // Saved every half minute too, so a crash or power cut loses little.
+        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.saveSession() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        autosave = t
+    }
+
+    // MARK: Windows
+
+    /// Settings → Windows: how many windows, with which layouts.
+    private func openDefaultWindows() {
+        let count = Prefs.windowCount
+        let frames = Self.frames(forWindows: count)
+        for i in 0..<count { openGrid(Prefs.layout(forWindow: i), frame: frames[i]) }
+    }
+
+    /// One window per display while there are enough displays; otherwise the windows share the
+    /// main display in a grid.
+    static func frames(forWindows n: Int) -> [NSRect?] {
+        guard n > 1 else { return [nil] }
+        let screens = NSScreen.screens
+        if n <= screens.count {
+            return screens.prefix(n).map { $0.visibleFrame.insetBy(dx: $0.visibleFrame.width * 0.05,
+                                                                    dy: $0.visibleFrame.height * 0.05) }
+        }
+        let area = (NSScreen.main ?? screens[0]).visibleFrame
+        let cols = Int(Double(n).squareRoot().rounded(.up))
+        let rows = (n + cols - 1) / cols
+        let w = area.width / CGFloat(cols), h = area.height / CGFloat(rows)
+        return (0..<n).map { i in
+            NSRect(x: area.minX + CGFloat(i % cols) * w, y: area.maxY - CGFloat(i / cols + 1) * h, width: w, height: h)
+                .insetBy(dx: 4, dy: 4)
+        }
+    }
+
+    // MARK: Session
+
+    /// Remembers every window, its layout and each tile's playlist and place in it.
+    private func saveSession() {
+        guard !grids.isEmpty else { return }
+        SavedSession(windows: grids.map { $0.snapshot() }).save()
+    }
+
+    /// Returns false when there was nothing to resume.
+    private func restoreSession() -> Bool {
+        guard let session = SavedSession.load(), !session.windows.isEmpty else { return false }
+        for saved in session.windows.prefix(Prefs.maxWindows) {
+            guard let layout = try? GridLayout.parse(saved.layout) else { continue }
+            var frame: NSRect? = NSRectFromString(saved.frame)
+            if let f = frame, f.width < 100 || !NSScreen.screens.contains(where: { $0.visibleFrame.intersects(f) }) {
+                frame = nil                                   // that display isn't connected now
+            }
+            openGrid(layout, frame: frame).restore(saved)
+        }
+        return !grids.isEmpty
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     /// Stop every player off the main thread before quitting (libVLC can crash if torn down mid-playback).
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if !terminating { saveSession() }
+        terminating = true
+        autosave?.invalidate()
         grids.forEach { $0.shutdown() }
         if Player.backgroundWork.wait(timeout: .now()) == .success { return .terminateNow }
         // A run-loop timer (not the main dispatch queue) so this also works when Quit was
@@ -72,19 +138,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.showWindow(nil)
     }
 
-    private func openGrid(_ layout: GridLayout) {
-        Prefs.lastLayout = layout.pattern
+    @discardableResult
+    private func openGrid(_ layout: GridLayout, frame: NSRect? = nil) -> GridWindowController {
         let grid = GridWindowController(layout: layout)
+        // Closing the last window quits, so remember it first: Resume brings it back.
+        grid.onWillClose = { [weak self] in
+            guard let self, !self.terminating, self.grids.count == 1 else { return }
+            self.saveSession()
+        }
         grid.onClose = { [weak self, weak grid] in self?.grids.removeAll { $0 === grid } }
+        if let window = grid.window {
+            if let frame {
+                window.setFrame(frame, display: false)
+            } else if let last = grids.last?.window {
+                // Each new window steps down and right from the last, so none hides another.
+                let topLeft = NSPoint(x: last.frame.minX, y: last.frame.maxY)
+                window.setFrameTopLeftPoint(window.cascadeTopLeft(from: topLeft))
+            }
+        }
         grids.append(grid)
         grid.showWindow(nil)
         if !pendingURLs.isEmpty {
             grid.distribute(pendingURLs)
             pendingURLs = []
         }
+        return grid
     }
 
-    @objc func newGridWindow(_ sender: Any?) { showPicker() }
+    @objc func newGridWindow(_ sender: Any?) {
+        guard grids.count < Prefs.maxWindows else {
+            let alert = NSAlert()
+            alert.messageText = "Video Grid is set to allow \(Prefs.maxWindows == 1 ? "one window" : "\(Prefs.maxWindows) windows")"
+            alert.informativeText = "Close a window, or raise the limit in Settings → Windows."
+            alert.addButton(withTitle: "OK")
+            alert.addButton(withTitle: "Open Settings")
+            if alert.runModal() == .alertSecondButtonReturn { SettingsWindowController.shared.show(page: 1) }
+            return
+        }
+        showPicker()
+    }
 
     static let repoURL = URL(string: "https://github.com/labalicious/videogrid")!
 
@@ -110,6 +202,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .credits: credits,
         ])
     }
+
+    #if VLCGRID_DEBUG
+    var debugGrids: [GridWindowController] { grids }
+    func debugSaveSession() { saveSession() }
+    #endif
 
     @objc func showSettings(_ sender: Any?) { SettingsWindowController.shared.showWindow(nil) }
     @objc func openRepo(_ sender: Any?) { NSWorkspace.shared.open(Self.repoURL) }
@@ -143,6 +240,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               double-click to play, or right-click → Play on Screen
               (each screen shows its number while the menu is open)
 
+        ⌘N  New grid window       ⌘,  Settings
         ⌘L  Playlist ↔ video      ⌘O  Add files to tile
         ⌥⌘P  Play / pause all     ⌥⌘R  Restart all from the start
         ⌥⌘M  Mute / unmute all    ⌥-click a speaker: hear only that tile
@@ -212,6 +310,13 @@ enum MainMenu {
             .keyEquivalentModifierMask = [.command, .option]
         playback.addItem(withTitle: "Mute / Unmute All", action: #selector(GridWindowController.toggleMuteAll(_:)), keyEquivalent: "m")
             .keyEquivalentModifierMask = [.command, .option]
+        playback.addItem(.separator())
+        let every = NSMenu(title: "Every Screen in This Window")
+        for (title, tag) in [("Repeat Off", 0), ("Repeat All", 1), ("Repeat One", 2), ("Random On", 3), ("Random Off", 4)] {
+            if tag == 3 { every.addItem(.separator()) }
+            every.addItem(withTitle: title, action: #selector(GridWindowController.setEveryScreen(_:)), keyEquivalent: "").tag = tag
+        }
+        playback.addItem(withTitle: every.title, action: nil, keyEquivalent: "").submenu = every
 
         let view = submenu(in: main, "View")
         view.addItem(withTitle: "Show Playlist", action: #selector(GridWindowController.togglePlaylistSelected(_:)), keyEquivalent: "l")

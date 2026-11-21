@@ -118,9 +118,13 @@ final class TileView: NSView {
         videoView.player = player
         player.attach(videoView)
         player.muted = Prefs.startMuted
+        player.repeatMode = Prefs.defaultRepeat
+        player.shuffle = Prefs.defaultShuffle
         player.onPlaylistChanged = { [weak self] in self?.playlistView.reload() }
-        player.onItemChanged = { [weak self] in self?.videoView.resetZoom() }
+        // Every new file starts unzoomed: the old zoom box means nothing on a different picture.
+        player.onItemChanged = { [weak self] in self?.videoView.resetZoom(force: true) }
         player.onStartedPlaying = { [weak self] in self?.videoView.reapplyCrop() }
+        player.onVideoOutput = { [weak self] in self?.videoView.reapplyCrop() }
         videoView.onMouseDown = { [weak self] in
             guard let self else { return }
             self.window?.makeFirstResponder(self)
@@ -336,6 +340,13 @@ final class TileView: NSView {
     @objc private func previousItem() { player.previous() }
     @objc private func nextItem() { player.next() }
 
+    /// Repeat and random for this screen (from Settings or the Playback menu).
+    func setPlayback(repeat mode: RepeatMode?, shuffle: Bool?) {
+        if let mode { player.repeatMode = mode }
+        if let shuffle { player.shuffle = shuffle }
+        refreshToggles()
+    }
+
     @objc private func cycleRepeat() {
         player.repeatMode = player.repeatMode.next
         refreshToggles()
@@ -406,6 +417,25 @@ final class TileView: NSView {
         showsPlaylist = false
     }
 
+    // MARK: Saving and restoring
+
+    func snapshot(mutedByApp: Bool) -> SavedTile {
+        SavedTile(items: player.items.map(\.path), current: player.currentIndex, time: player.resumeTime,
+                  playing: player.isPlaying, repeatMode: player.repeatMode.rawValue, shuffle: player.shuffle,
+                  volume: player.volume, muted: player.muted && !mutedByApp, showsPlaylist: showsPlaylist)
+    }
+
+    func restore(_ s: SavedTile) {
+        player.repeatMode = RepeatMode(rawValue: s.repeatMode) ?? .off
+        player.restore(items: s.items.map { URL(fileURLWithPath: $0) }, current: s.current, time: s.time)
+        player.shuffle = s.shuffle
+        player.volume = s.volume
+        player.muted = s.muted
+        showsPlaylist = s.showsPlaylist || player.items.isEmpty
+        refreshToggles()
+        if s.playing { startPlayback() }
+    }
+
     /// Name of what this tile is playing (or has queued first), for menus.
     var currentTitle: String? {
         (player.currentURL ?? player.items.first)?.lastPathComponent
@@ -470,7 +500,12 @@ final class TileView: NSView {
         dropHighlight = false
         let files = MediaFiles.expand(MediaFiles.urls(from: sender.draggingPasteboard))
         guard !files.isEmpty else { return false }
-        add(files, autoplay: true)
+        dropped(files)
         return true
+    }
+
+    /// Dropping on a screen plays the new video now (unless Settings says to queue it).
+    func dropped(_ files: [URL]) {
+        if Prefs.dropPlaysNow { playNow(files) } else { add(files, autoplay: true) }
     }
 }

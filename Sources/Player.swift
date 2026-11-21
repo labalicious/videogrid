@@ -47,10 +47,14 @@ final class Player {
     private(set) var geometry: (size: CGSize, sar: CGFloat, transposed: Bool)?
     private var pendingSeek: Int64?
     private var endHandled = true
+    private var hadVideoOutput = false
 
     var onPlaylistChanged: (() -> Void)?
     var onItemChanged: (() -> Void)?
     var onStartedPlaying: (() -> Void)?
+    /// VLC has (re)created its video output. VLC reuses the output between files, and a reused
+    /// output keeps the old crop, so the zoom has to be sent again at this point.
+    var onVideoOutput: (() -> Void)?
 
     init() {
         mp = libvlc_media_player_new(VLC.shared.instance)!
@@ -85,6 +89,11 @@ final class Player {
         if st != state {
             state = st
             if st == libvlc_Playing { didStartPlaying() }
+        }
+        let hasVideoOutput = libvlc_media_player_has_vout(mp) > 0
+        if hasVideoOutput != hadVideoOutput {
+            hadVideoOutput = hasVideoOutput
+            if hasVideoOutput { onVideoOutput?() }
         }
         if geometry == nil, st == libvlc_Playing || st == libvlc_Paused {
             geometry = probeGeometry()
@@ -127,12 +136,14 @@ final class Player {
         }
         lastError = false
         endHandled = false
+        hadVideoOutput = false
         time = 0; position = 0
         loadsPending += 1
         let path = items[index].path
         let instance = VLC.shared.instance
         background({ mp in
             guard let media = libvlc_media_new_path(instance, path) else { return }
+            if changed { libvlc_video_set_crop_geometry(mp, "") }   // a new file starts unzoomed
             libvlc_media_player_set_media(mp, media)
             libvlc_media_release(media)
             libvlc_media_player_play(mp)
@@ -280,6 +291,20 @@ final class Player {
 
     func clearLoop() { loopA = nil; loopB = nil }
 
+    // MARK: Saving and restoring
+
+    /// Where to pick up again: the playing position, or the one waiting to be applied.
+    var resumeTime: Int64 { hasActiveMedia ? time : (pendingSeek ?? 0) }
+
+    /// Puts back a saved playlist without starting it. Playing it later starts at `time`.
+    func restore(items: [URL], current: Int?, time: Int64) {
+        guard !released else { return }
+        self.items = items
+        currentIndex = current.flatMap { items.indices.contains($0) ? $0 : nil }
+        pendingSeek = currentIndex != nil && time > 0 ? time : nil
+        playlistMutated()
+    }
+
     // MARK: Playlist editing
 
     func append(_ urls: [URL]) { insert(urls, at: items.count) }
@@ -397,7 +422,7 @@ final class Player {
     func shutdown(keepAlive: AnyObject) {
         guard !released else { return }
         released = true
-        onPlaylistChanged = nil; onItemChanged = nil; onStartedPlaying = nil
+        onPlaylistChanged = nil; onItemChanged = nil; onStartedPlaying = nil; onVideoOutput = nil
         let token = Unmanaged.passRetained(keepAlive)
         background({ mp in
             libvlc_media_player_stop(mp)

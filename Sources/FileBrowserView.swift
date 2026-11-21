@@ -56,11 +56,15 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     private var root: FileNode
     private var screenMenus: Set<ObjectIdentifier> = []
     private var style = Prefs.browserStyle
+    /// Showing the home folder because the starting folder's server or drive wasn't there.
+    private var showingFallback: Bool
 
     static let rootKey = "browserRoot"
 
     override init(frame: NSRect) {
-        root = FileNode(url: Prefs.browserFolder, isFolder: true)
+        let start = StartFolder.resolve()
+        root = FileNode(url: start.url, isFolder: true)
+        showingFallback = start.isFallback
         super.init(frame: frame)
         material = .sidebar
         blendingMode = .behindWindow
@@ -69,6 +73,28 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
         rebuildFolderMenu()
         rebuildStyleMenu()
         NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Prefs.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(startFolderReconnected(_:)),
+                                               name: StartFolder.reconnected, object: nil)
+        let workspace = NSWorkspace.shared.notificationCenter
+        workspace.addObserver(self, selector: #selector(volumesChanged), name: NSWorkspace.didMountNotification, object: nil)
+        workspace.addObserver(self, selector: #selector(volumesChanged), name: NSWorkspace.didUnmountNotification, object: nil)
+    }
+
+    /// The starting folder's server came back: switch, unless the user has already gone elsewhere.
+    @objc private func startFolderReconnected(_ note: Notification) {
+        guard showingFallback, let url = note.object as? URL else { return }
+        show(folder: url)
+    }
+
+    /// A drive or server came or went: keep the folder menu current, and leave a folder that vanished.
+    @objc private func volumesChanged() {
+        let start = StartFolder.resolve()
+        if !StartFolder.isAvailable(root.url) || (showingFallback && !start.isFallback) {
+            show(folder: start.url)
+            showingFallback = start.isFallback
+        } else {
+            rebuildFolderMenu()
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -192,6 +218,7 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     }
 
     @objc private func prefsChanged() {
+        rebuildFolderMenu()                 // the "Start Here in New Windows" tick may have changed
         guard Prefs.browserStyle != style else { return }
         style = Prefs.browserStyle
         rebuildStyleMenu()
@@ -234,18 +261,32 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
         }
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Choose Folder…", action: nil, keyEquivalent: ""))
+        let makeDefault = NSMenuItem(title: "Start Here in New Windows", action: nil, keyEquivalent: "")
+        makeDefault.representedObject = Self.makeDefaultMarker
+        makeDefault.state = root.url.standardizedFileURL == Prefs.browserFolder.standardizedFileURL ? .on : .off
+        menu.addItem(makeDefault)
         folderPopup.menu = menu
         folderPopup.selectItem(at: 0)
     }
 
+    private static let makeDefaultMarker = "makeDefault"
+
+    /// Browses a folder. The starting folder for new windows only changes from Settings or
+    /// "Start Here in New Windows".
     func show(folder: URL) {
         root = FileNode(url: folder, isFolder: true)
-        UserDefaults.standard.set(folder.path, forKey: Self.rootKey)
+        showingFallback = false
         rebuildFolderMenu()
         outline.reloadData()
     }
 
     @objc private func folderChosen(_ sender: NSPopUpButton) {
+        if sender.selectedItem?.representedObject as? String == Self.makeDefaultMarker {
+            folderPopup.selectItem(at: 0)
+            Prefs.browserFolder = root.url
+            rebuildFolderMenu()
+            return
+        }
         if let url = sender.selectedItem?.representedObject as? URL {
             if url != root.url { show(folder: url) }
             return
@@ -417,6 +458,7 @@ final class FileBrowserView: NSVisualEffectView, NSOutlineViewDataSource, NSOutl
     func menu(forDebug: Void) -> NSMenu? { outline.menu }
     var debugRowCount: Int { outline.numberOfRows }
     /// Shows a folder without saving it as the browser's folder.
+    var debugRoot: String { root.url.path + (showingFallback ? " (fallback)" : "") }
     func debugShow(folder: URL) { root = FileNode(url: folder, isFolder: true); outline.reloadData() }
     var debugCells: [String] {
         (0..<outline.numberOfRows).compactMap { r in

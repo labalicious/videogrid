@@ -126,8 +126,9 @@ final class VideoView: NSView {
         changed()
     }
 
-    func resetZoom() {
-        guard zoom != 1 || center != nil else { return }
+    /// `force` re-sends the unzoomed crop even when already at 1× (a new file is starting).
+    func resetZoom(force: Bool = false) {
+        guard force || zoom != 1 || center != nil else { return }
         zoom = 1
         center = nil
         changed()

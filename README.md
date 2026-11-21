@@ -21,7 +21,13 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 
 - **Switch layouts any time** from the Layout menu. Every tile keeps its videos.
 - **Move any tile into the big slot** with ⌘1.
-- **Maximize one tile** to fill the window with ⌘Return, and press Esc to go back.
+- **Maximize one tile** to fill the window with ⌘Return, and press Esc to go back. The other videos go quiet while it's maximized and get their sound back afterwards (this can be turned off in Settings).
+
+### Windows
+- **Several grid windows at once:** *File → New Grid Window* (⌘N) opens another window with its own layout and videos. Each new window steps down and to the right, so none hides another.
+- **Open several windows at launch:** say how many in Settings, and give them all the same layout or a different layout each. With more than one display, each window gets its own display.
+- **Resume where you left off:** Video Grid can reopen your windows with every playlist, each video at the point where you stopped it. Or it can start fresh every time.
+- **Limit:** choose the most windows Video Grid will open at once.
 
 ### Resizing
 - **Drag the line between two videos** to resize them. Only the tiles touching that line change size, so dragging a line in the top row leaves the bottom row alone.
@@ -31,7 +37,8 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 ### Playback for each tile
 - Play/pause, previous/next, and a seek bar.
 - **Playlist** per tile: drop files or whole folders on it, reorder by dragging, and double-click to play. Tiles open on their playlist so you can fill them right away.
-- **Repeat** (off, all, or one) and **random**.
+- **Drop to play:** dropping a video on a screen that's already playing switches to the new video right away. It's added to that screen's playlist too. (Settings can make drops join the end of the playlist instead.)
+- **Repeat** (off, all, or one) and **random**. Settings chooses what new screens start with, and *Playback → Every Screen in This Window* sets them for every screen at once.
 - **A-B loop:** set two points and the tile loops between them. Click the button to type exact times.
 - Volume and mute for each tile.
 
@@ -39,22 +46,23 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 - **Box zoom:** drag a rectangle over part of a video and that area fills the tile.
 - **Other zoom controls:** pinch, scroll wheel, or ⌘-scroll to zoom toward the pointer.
 - **Pan** by dragging or two-finger scrolling when zoomed in.
-- **Reset** with a double-click or `0`.
+- **Reset** with a double-click or `0`. Zoom also resets whenever a screen starts a different video.
 - **Zoom follows the tile's shape**, so a tall tile shows a tall slice of a wide video.
 
 ### File browser sidebar
-- **Folder list:** a Finder-style list of your folders and videos. Start from Movies, Downloads, Desktop, an external drive, or any folder you choose.
+- **Folder list:** a Finder-style list of your folders and videos. Start from Movies, Downloads, Desktop, an external drive, a connected server, or any folder you choose.
+- **Starting folder:** set it in Settings, or choose *Start Here in New Windows* from the folder menu. If it's on a server that isn't connected, Video Grid tries to reconnect the server using the password saved in your keychain. If it's on a drive that's unplugged, or the server can't be reached, the browser opens your home folder instead.
 - **Names or thumbnails:** show files as plain names, small thumbnails beside the names, or large thumbnails that fill the sidebar's width. Thumbnails work for every format, including MKV, AVI, and WebM, which Finder can't preview; they're grabbed with VLC and cached so they appear instantly next time.
 - **Drag** videos onto any tile or its playlist, or **double-click** one to play it on the selected tile.
 - **Right-click** a video for **Play on Screen ▸** or **Add to Screen's Playlist ▸**. While that menu is open, every tile shows its screen number in large type, and the one you point at lights up.
 - **Placement:** put the sidebar on the left or the right, drag its edge to resize it, or hide it with ⌃⌘S or the title-bar button.
 
 ### Settings
-*Video Grid → Settings…* (⌘,) lets you choose:
-- whether the app asks for a layout at launch or reopens the last one you used
-- dark, light, or system appearance
-- whether each video shows its number and file name, and whether new screens start muted
-- how the file browser shows files, which side it sits on, the folder it starts in, and whether new windows show it
+*Video Grid → Settings…* (⌘,) has four pages:
+- **General:** dark, light, or system appearance, and whether each video shows its number and file name.
+- **Windows:** what happens at launch (resume where you left off, open your default windows, or ask for a layout), how many default windows to open, their layouts (the same for all or one each), and the most windows allowed at once.
+- **Playback:** repeat, random, and mute for new screens (with a button to apply them to every open screen), what dropping a video on a screen does, and whether a maximized video silences the others.
+- **File Browser:** names or thumbnails, left or right, the folder it starts in, and whether new windows show it.
 
 ### Whole-window keys
 | Key | Action |
@@ -66,6 +74,7 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 | ⌥⌘P / ⌥⌘R / ⌥⌘S / ⌥⌘M | Play/pause all, restart all, stop all, mute all |
 | ⌥⌘4 / ⌥⌘6 / ⌥⌘9 | Switch to 2×2 / 3×2 / 3×3 |
 | ⇧⌘L | Custom layout |
+| ⌘N | New grid window |
 | ⌘O | Add files to the selected tile |
 | ⌘, | Settings |
 
@@ -92,12 +101,12 @@ Download **Video Grid.dmg** from [Releases](https://github.com/labalicious/video
 You need the Xcode Command Line Tools (`xcode-select --install`) and [VLC](https://www.videolan.org/vlc/) installed in `/Applications`. Full Xcode isn't needed.
 
 ```bash
-./build.sh            # builds build/Video Grid.app
+./build.sh            # builds build/app.noindex/Video Grid.app
 ./build.sh install    # also copies it to ~/Applications
 ./build.sh dist       # signs, notarizes, and makes build/Video Grid.dmg
 ```
 
-The build copies libVLC and its plugins out of VLC.app into the bundle, so the app runs on its own and later VLC updates can't break it. Re-run the build to pick up a newer libVLC.
+The build copies libVLC and its plugins out of VLC.app into the bundle, so the app runs on its own and later VLC updates can't break it. Re-run the build to pick up a newer libVLC. The build goes in a `.noindex` folder so Spotlight and Launchpad list only your installed copy.
 
 `./build.sh dist` needs a **Developer ID Application** certificate (from developer.apple.com → Certificates) and saved notarization credentials:
 
@@ -123,6 +132,7 @@ The app is written in Swift and AppKit and talks to libVLC 3 through its C API. 
 | `Sources/FileBrowserView.swift` | The file browser sidebar, its names/thumbnails views, and its Play on Screen menu. |
 | `Sources/Thumbnails.swift` | Video thumbnails: Quick Look first, then a frame grabbed by libVLC, cached on disk. |
 | `Sources/Settings.swift` | The preferences and the Settings window. |
+| `Sources/Session.swift` | Saving and resuming windows and playlists, and finding (or reconnecting) the file browser's starting folder. |
 | `Sources/LayoutPicker.swift`, `Support.swift` | The layout picker and pattern parsing. |
 | `Sources/DebugHarness.swift` | Test-only (`DEBUG=1 ./build.sh`): drives the app and saves pictures of the window. |
 

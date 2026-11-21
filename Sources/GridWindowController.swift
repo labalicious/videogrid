@@ -175,6 +175,9 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     private var picker: LayoutPickerController?
     private var isShutDown = false
     private var arranging = false
+    /// Tiles this window muted because another tile was maximized; unmuted again afterwards.
+    private var mutedForMaximize: [TileView] = []
+    var onWillClose: (() -> Void)?
     var onClose: (() -> Void)?
 
     static let browserOnRightKey = "browserOnRight"
@@ -201,16 +204,17 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         window.delegate = self
         split.delegate = self
         browser.delegate = self
-        browser.isHidden = !(UserDefaults.standard.object(forKey: Self.browserVisibleKey) as? Bool ?? true)
+        browser.isHidden = !Prefs.browserVisible
         setUpTitlebarButton()
         arrangeBrowser()
-        window.center()
-        window.setFrameAutosaveName("VideoGridWindow")
+        window.center()           // the app delegate places it properly (each window has its own place)
         apply(layout: layout)
         startTimer()
         installEventMonitor()
         NotificationCenter.default.addObserver(self, selector: #selector(browserSideChanged),
                                                name: Self.browserSideChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(applyPlaybackDefaults),
+                                               name: Prefs.applyPlaybackToAll, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -231,7 +235,7 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
             tile.removeFromSuperview()
         }
         if let s = selected, !tiles.contains(where: { $0 === s }) { deselect() }
-        gridView.maximized = nil
+        setMaximized(nil)
         gridView.configure(layout: layout, tiles: tiles)
         window?.title = "Video Grid: \(layout.title)"
     }
@@ -338,7 +342,7 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 {                      // Esc: leave maximized view, else deselect
-            if gridView.maximized != nil { gridView.maximized = nil } else { deselect() }
+            if gridView.maximized != nil { setMaximized(nil) } else { deselect() }
             return
         }
         if let s = selected, s.handleKey(event) { return }
@@ -359,6 +363,7 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     }
 
     func windowWillClose(_ notification: Notification) {
+        onWillClose?()
         shutdown()
         onClose?()
     }
@@ -510,12 +515,44 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     // MARK: TileViewDelegate
 
     func tileRequestsMaximizeToggle(_ tile: TileView) {
-        gridView.maximized = (gridView.maximized === tile) ? nil : tile
+        setMaximized(gridView.maximized === tile ? nil : tile)
         select(tile)
     }
 
+    /// Shows one tile filling the window (nil: back to the grid). With the Settings option on,
+    /// the other tiles go quiet meanwhile and get their sound back afterwards.
+    private func setMaximized(_ tile: TileView?) {
+        guard gridView.maximized !== tile else { return }
+        for t in mutedForMaximize where t.player.muted && tiles.contains(where: { $0 === t }) { t.setMuted(false) }
+        mutedForMaximize = []
+        gridView.maximized = tile
+        guard let tile, Prefs.muteOthersWhenMaximized else { return }
+        for t in tiles where t !== tile && !t.player.muted {
+            t.setMuted(true)
+            mutedForMaximize.append(t)
+        }
+    }
+
     func tileRequestsSoloAudio(_ tile: TileView) {
+        mutedForMaximize = []
         for t in tiles { t.setMuted(t !== tile) }
+    }
+
+    // MARK: Saving and restoring
+
+    func snapshot() -> SavedWindow {
+        SavedWindow(layout: layout.pattern, frame: window.map { NSStringFromRect($0.frame) } ?? "",
+                    tiles: tiles.map { t in t.snapshot(mutedByApp: mutedForMaximize.contains { $0 === t }) })
+    }
+
+    func restore(_ saved: SavedWindow) {
+        for (tile, s) in zip(tiles, saved.tiles) { tile.restore(s) }
+    }
+
+    @objc private func applyPlaybackDefaults() {
+        tiles.forEach { $0.setPlayback(repeat: Prefs.defaultRepeat, shuffle: Prefs.defaultShuffle) }
+        tiles.forEach { $0.setMuted(Prefs.startMuted) }
+        mutedForMaximize = []
     }
 
     func tileRequestsAddFiles(_ tile: TileView) { addFiles(to: tile) }
@@ -577,13 +614,22 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     @objc func toggleMuteAll(_ sender: Any?) {
         let anyAudible = tiles.contains { !$0.player.muted }
         tiles.forEach { $0.setMuted(anyAudible) }
+        mutedForMaximize = []
+    }
+
+    /// Playback → Every Screen: tag 0–2 repeat off/all/one, 3 random on, 4 random off.
+    @objc func setEveryScreen(_ sender: NSMenuItem) {
+        switch sender.tag {
+        case 0...2: tiles.forEach { $0.setPlayback(repeat: RepeatMode(rawValue: sender.tag), shuffle: nil) }
+        default: tiles.forEach { $0.setPlayback(repeat: nil, shuffle: sender.tag == 3) }
+        }
     }
 
     @objc func togglePlaylistSelected(_ sender: Any?) { selected?.togglePlaylist() }
     @objc func showAllPlaylists(_ sender: Any?) { tiles.forEach { $0.showsPlaylist = true } }
     @objc func showAllVideos(_ sender: Any?) { tiles.forEach { $0.showsPlaylist = false } }
     @objc func toggleMaximizeSelected(_ sender: Any?) {
-        if let s = selected { tileRequestsMaximizeToggle(s) } else { gridView.maximized = nil }
+        if let s = selected { tileRequestsMaximizeToggle(s) } else { setMaximized(nil) }
     }
     @objc func resetZoomSelected(_ sender: Any?) { selected?.videoView.resetZoom() }
     @objc func zoomInSelected(_ sender: Any?) { selected?.videoView.zoom(by: 1.25) }
@@ -598,6 +644,10 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
         case #selector(applyPresetLayout(_:)):
             let l = (item.representedObject as? String).flatMap { try? GridLayout.parse($0) }
             item.state = (l?.tiles == layout.tiles && l?.rows == layout.rows && l?.cols == layout.cols) ? .on : .off
+        case #selector(setEveryScreen(_:)):
+            let all: (TileView) -> Bool = item.tag <= 2
+                ? { $0.player.repeatMode.rawValue == item.tag } : { $0.player.shuffle == (item.tag == 3) }
+            item.state = tiles.allSatisfy(all) ? .on : .off
         case #selector(moveSelectedToFirst(_:)):
             return selected != nil && selected !== tiles.first
         case #selector(toggleTitles(_:)):
