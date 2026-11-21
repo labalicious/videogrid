@@ -141,3 +141,7 @@ The app is written in Swift and AppKit and talks to libVLC 3 through its C API. 
 Made by Kevin Dimond. And built with ❤️ from Claude Code.
 
 Playback is by [libVLC](https://www.videolan.org/vlc/libvlc.html) from VideoLAN. libVLC and its plugins are licensed under the LGPL/GPL, and their source code is available at [videolan.org](https://www.videolan.org).
+
+## License
+
+Video Grid is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE). You can use, share and change it, as long as versions you share stay under the same license.
