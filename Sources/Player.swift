@@ -56,8 +56,25 @@ final class Player {
     /// output keeps the old crop, so the zoom has to be sent again at this point.
     var onVideoOutput: (() -> Void)?
 
+    /// The speakers libVLC was last told to use ("0": whatever macOS is using).
+    private var speakers = "0"
+    private var speakersObserver: NSObjectProtocol?
+
     init() {
         mp = libvlc_media_player_new(VLC.shared.instance)!
+        applySpeakers()
+        speakersObserver = NotificationCenter.default.addObserver(forName: Speakers.changed, object: nil, queue: .main) {
+            [weak self] _ in MainActor.assumeIsolated { self?.applySpeakers() }
+        }
+    }
+
+    /// Settings → Playback → Play sound through. libVLC moves the sound over right away,
+    /// even mid-video, and keeps that device for the files after it.
+    private func applySpeakers() {
+        let device = Speakers.vlcDevice
+        guard !released, device != speakers else { return }
+        speakers = device
+        background { mp in libvlc_audio_output_device_set(mp, nil, device) }
     }
 
     // MARK: Status
@@ -415,6 +432,14 @@ final class Player {
         return nil
     }
 
+    #if VLCGRID_DEBUG
+    var debugDevice: String {
+        guard let p = libvlc_audio_output_device_get(mp) else { return "none" }
+        defer { free(p) }
+        return String(cString: p)
+    }
+    #endif
+
     // MARK: Lifetime
 
     /// Stops and frees the player off the main thread. `keepAlive` (the video view)
@@ -423,6 +448,7 @@ final class Player {
         guard !released else { return }
         released = true
         onPlaylistChanged = nil; onItemChanged = nil; onStartedPlaying = nil; onVideoOutput = nil
+        if let o = speakersObserver { NotificationCenter.default.removeObserver(o); speakersObserver = nil }
         let token = Unmanaged.passRetained(keepAlive)
         background({ mp in
             libvlc_media_player_stop(mp)

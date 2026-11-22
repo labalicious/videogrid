@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         StartFolder.reconnectIfNeeded()
+        Speakers.startWatching()
         // Command line: VideoGrid --layout XOO/XOO [--play] file1 file2 …  skips the picker.
         let args = Array(CommandLine.arguments.dropFirst())
         if let i = args.firstIndex(of: "--layout"), i + 1 < args.count,
@@ -317,6 +318,12 @@ enum MainMenu {
             every.addItem(withTitle: title, action: #selector(GridWindowController.setEveryScreen(_:)), keyEquivalent: "").tag = tag
         }
         playback.addItem(withTitle: every.title, action: nil, keyEquivalent: "").submenu = every
+        playback.addItem(.separator())
+        let output = NSMenu(title: "Sound Output")
+        output.delegate = AudioMenu.shared
+        playback.addItem(withTitle: output.title, action: nil, keyEquivalent: "").submenu = output
+        playback.addItem(withTitle: "Silence Others When Maximized",
+                         action: #selector(AudioMenu.toggleSilenceOthers(_:)), keyEquivalent: "").target = AudioMenu.shared
 
         let view = submenu(in: main, "View")
         view.addItem(withTitle: "Show Playlist", action: #selector(GridWindowController.togglePlaylistSelected(_:)), keyEquivalent: "l")

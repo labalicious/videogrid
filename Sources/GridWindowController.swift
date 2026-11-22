@@ -215,6 +215,7 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
                                                name: Self.browserSideChanged, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(applyPlaybackDefaults),
                                                name: Prefs.applyPlaybackToAll, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Prefs.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -523,13 +524,30 @@ final class GridWindowController: NSWindowController, NSWindowDelegate, NSMenuIt
     /// the other tiles go quiet meanwhile and get their sound back afterwards.
     private func setMaximized(_ tile: TileView?) {
         guard gridView.maximized !== tile else { return }
-        for t in mutedForMaximize where t.player.muted && tiles.contains(where: { $0 === t }) { t.setMuted(false) }
-        mutedForMaximize = []
+        restoreSilenced()
         gridView.maximized = tile
-        guard let tile, Prefs.muteOthersWhenMaximized else { return }
+        if let tile, Prefs.muteOthersWhenMaximized { silenceOthers(except: tile) }
+    }
+
+    private func silenceOthers(except tile: TileView) {
         for t in tiles where t !== tile && !t.player.muted {
             t.setMuted(true)
             mutedForMaximize.append(t)
+        }
+    }
+
+    private func restoreSilenced() {
+        for t in mutedForMaximize where t.player.muted && tiles.contains(where: { $0 === t }) { t.setMuted(false) }
+        mutedForMaximize = []
+    }
+
+    /// The maximize sound setting changed while a video is maximized: apply it now.
+    @objc private func prefsChanged() {
+        guard let tile = gridView.maximized else { return }
+        if Prefs.muteOthersWhenMaximized {
+            if mutedForMaximize.isEmpty { silenceOthers(except: tile) }
+        } else {
+            restoreSilenced()
         }
     }
 

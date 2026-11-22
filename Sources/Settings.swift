@@ -94,9 +94,28 @@ enum Prefs {
         get { flag("dropPlaysNow", default: true) }
         set { d.set(newValue, forKey: "dropPlaysNow"); post() }
     }
+    /// Maximizing a video silences the others (otherwise they keep playing sound).
     static var muteOthersWhenMaximized: Bool {
         get { flag("muteOthersWhenMaximized", default: true) }
         set { d.set(newValue, forKey: "muteOthersWhenMaximized"); post() }
+    }
+
+    // MARK: Sound
+
+    /// The speakers to play through (a Core Audio device UID); nil follows macOS's sound output.
+    static var speakerUID: String? { d.string(forKey: "speakerUID") }
+    /// The chosen speakers' name, shown while they're disconnected.
+    static var speakerName: String? { d.string(forKey: "speakerName") }
+    static func setSpeakers(_ device: Speakers.Device?) {
+        if let device {
+            d.set(device.uid, forKey: "speakerUID")
+            d.set(device.name, forKey: "speakerName")
+        } else {
+            d.removeObject(forKey: "speakerUID")
+            d.removeObject(forKey: "speakerName")
+        }
+        Speakers.refresh()
+        post()
     }
 
     // MARK: Look
@@ -191,6 +210,7 @@ final class SettingsWindowController: NSWindowController {
         ])
         window.contentView = content
         NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Prefs.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Speakers.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -319,9 +339,33 @@ final class SettingsWindowController: NSWindowController {
         let drop = popup(["Plays it right away", "Adds it to the end of the playlist"], selected: Prefs.dropPlaysNow ? 0 : 1) {
             Prefs.dropPlaysNow = $0 == 0
         }
-        let silence = checkbox("When one video is maximized, silence the others", Prefs.muteOthersWhenMaximized) {
-            Prefs.muteOthersWhenMaximized = $0
+        let silence = radio("Silence the other videos", Prefs.muteOthersWhenMaximized) {
+            Prefs.muteOthersWhenMaximized = true
         }
+        let keep = radio("Keep the other videos' sound playing", !Prefs.muteOthersWhenMaximized) {
+            Prefs.muteOthersWhenMaximized = false
+        }
+
+        let devices = Speakers.outputs()
+        var names = ["Same as macOS"] + devices.map(\.name)
+        var selected = 0
+        if let uid = Prefs.speakerUID {
+            if let i = devices.firstIndex(where: { $0.uid == uid }) {
+                selected = i + 1
+            } else {
+                names.append("\(Prefs.speakerName ?? "Chosen speakers") (not connected)")
+                selected = names.count - 1
+            }
+        }
+        let speakers = popup(names, selected: selected) { i in
+            if i == 0 { Prefs.setSpeakers(nil) } else if i <= devices.count { Prefs.setSpeakers(devices[i - 1]) }
+        }
+        let speakerNote = Prefs.speakerUID == nil
+            ? "Sound goes wherever macOS sends it, so it moves to the TV when you AirPlay or cast. "
+              + "Choose speakers to keep Video Grid's sound on them."
+            : "Video Grid's sound stays on these speakers when you AirPlay or cast to a TV. "
+              + "If they're disconnected, sound goes wherever macOS sends it until they're back."
+
         let grid = NSGridView(views: [
             [heading("New screens"), empty],
             [label("Repeat:"), rep],
@@ -331,10 +375,13 @@ final class SettingsWindowController: NSWindowController {
             [empty, note("Each screen's own repeat, random and speaker buttons still change just that screen.")],
             [heading("Behavior"), empty],
             [label("Dropping a video on a screen:"), drop],
-            [empty, silence],
+            [label("When a video is maximized:"), silence],
+            [empty, keep],
+            [heading("Sound"), empty],
+            [label("Play sound through:"), speakers],
+            [empty, note(speakerNote)],
         ])
-        headingRow(grid, 0)
-        headingRow(grid, 6)
+        for r in [0, 6, 10] { headingRow(grid, r) }
         return grid
     }
 

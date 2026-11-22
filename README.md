@@ -21,7 +21,7 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 
 - **Switch layouts any time** from the Layout menu. Every tile keeps its videos.
 - **Move any tile into the big slot** with ⌘1.
-- **Maximize one tile** to fill the window with ⌘Return, and press Esc to go back. The other videos go quiet while it's maximized and get their sound back afterwards (this can be turned off in Settings).
+- **Maximize one tile** to fill the window with ⌘Return, and press Esc to go back. You choose what happens to the other videos' sound: they go quiet while it's maximized and get it back afterwards, or they keep playing. Set it in Settings or with *Playback → Silence Others When Maximized*.
 
 ### Windows
 - **Several grid windows at once:** *File → New Grid Window* (⌘N) opens another window with its own layout and videos. Each new window steps down and to the right, so none hides another.
@@ -38,6 +38,7 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 - Play/pause, previous/next, and a seek bar.
 - **Playlist** per tile: drop files or whole folders on it, reorder by dragging, and double-click to play. Tiles open on their playlist so you can fill them right away.
 - **Drop to play:** dropping a video on a screen that's already playing switches to the new video right away. It's added to that screen's playlist too. (Settings can make drops join the end of the playlist instead.)
+- **Choose the speakers.** By default sound goes wherever macOS sends it, so it moves to the TV when you AirPlay or cast. Pick speakers in Settings or *Playback → Sound Output* to keep Video Grid's sound on them. If they're disconnected, sound follows macOS until they're back.
 - **Repeat** (off, all, or one) and **random**. Settings chooses what new screens start with, and *Playback → Every Screen in This Window* sets them for every screen at once.
 - **A-B loop:** set two points and the tile loops between them. Click the button to type exact times.
 - Volume and mute for each tile.
@@ -61,7 +62,7 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 *Video Grid → Settings…* (⌘,) has four pages:
 - **General:** dark, light, or system appearance, and whether each video shows its number and file name.
 - **Windows:** what happens at launch (resume where you left off, open your default windows, or ask for a layout), how many default windows to open, their layouts (the same for all or one each), and the most windows allowed at once.
-- **Playback:** repeat, random, and mute for new screens (with a button to apply them to every open screen), what dropping a video on a screen does, and whether a maximized video silences the others.
+- **Playback:** repeat, random, and mute for new screens (with a button to apply them to every open screen), what dropping a video on a screen does, whether a maximized video silences the others or they keep playing, and which speakers to play through.
 - **File Browser:** names or thumbnails, left or right, the folder it starts in, and whether new windows show it.
 
 ### Whole-window keys
@@ -132,6 +133,7 @@ The app is written in Swift and AppKit and talks to libVLC 3 through its C API. 
 | `Sources/FileBrowserView.swift` | The file browser sidebar, its names/thumbnails views, and its Play on Screen menu. |
 | `Sources/Thumbnails.swift` | Video thumbnails: Quick Look first, then a frame grabbed by libVLC, cached on disk. |
 | `Sources/Settings.swift` | The preferences and the Settings window. |
+| `Sources/Speakers.swift` | Choosing the speakers, and following them as they're connected and disconnected. |
 | `Sources/Session.swift` | Saving and resuming windows and playlists, and finding (or reconnecting) the file browser's starting folder. |
 | `Sources/LayoutPicker.swift`, `Support.swift` | The layout picker and pattern parsing. |
 | `Sources/DebugHarness.swift` | Test-only (`DEBUG=1 ./build.sh`): drives the app and saves pictures of the window. |

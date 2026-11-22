@@ -1,5 +1,6 @@
 #if VLCGRID_DEBUG
 import AppKit
+import CoreAudio
 
 /// Test-only: drives zoom on a running grid and saves pictures of the window, so zoom can be
 /// checked without a person at the screen. Built only with `DEBUG=1 ./build.sh`.
@@ -244,6 +245,10 @@ extension DebugHarness {
             at(5.5) { NSApp.terminate(nil) }
             return
         }
+        if ProcessInfo.processInfo.environment["VLCGRID_MODE"] == "speakers" {
+            speakers(app, at: at)
+            return
+        }
         if ProcessInfo.processInfo.environment["VLCGRID_MODE"] == "resume" {
             at(5) { report(); NSApp.terminate(nil) }
             return
@@ -293,6 +298,85 @@ extension DebugHarness {
             print("DEBUG saved \(s?.windows.count ?? 0) windows: \(s?.windows.map { "\($0.layout) \($0.tiles.filter { !$0.items.isEmpty }.count) filled" } ?? [])")
             NSApp.terminate(nil)
         }
+    }
+}
+
+extension DebugHarness {
+    /// VLCGRID_MODE=speakers: picks a test output (a private device only this process can see,
+    /// playing through the current speakers), unplugs it, plugs it back, and checks where sound goes.
+    static func speakers(_ app: AppDelegate, at: (Double, @escaping () -> Void) -> Void) {
+        let testUID = "videogrid.test.output"
+        var test: AudioObjectID = 0
+        func address(_ s: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+            AudioObjectPropertyAddress(mSelector: s, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        }
+        func plugIn() {
+            var addr = address(kAudioHardwarePropertyDefaultOutputDevice)
+            var def: AudioDeviceID = 0
+            var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &def)
+            let realUID = Speakers.outputs().first { $0.id == def }?.uid ?? ""
+            let desc: [String: Any] = [kAudioAggregateDeviceNameKey: "VG Test Output", kAudioAggregateDeviceUIDKey: testUID,
+                                       kAudioAggregateDeviceIsPrivateKey: 1,
+                                       kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: realUID]]]
+            let err = AudioHardwareCreateAggregateDevice(desc as CFDictionary, &test)
+            print("DEBUG plugged in test output: err \(err) id \(test) (through \(realUID))")
+        }
+        func unplug() {
+            print("DEBUG unplugged test output: err \(AudioHardwareDestroyAggregateDevice(test))")
+        }
+        func running() -> Bool {
+            var addr = address(kAudioDevicePropertyDeviceIsRunningSomewhere)
+            var v: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(test, &addr, 0, nil, &size, &v) == noErr && v != 0
+        }
+        func report(_ what: String) {
+            let tiles = app.debugGrids.first?.tiles ?? []
+            let players = tiles.prefix(2).map { "\($0.player.debugDevice) \($0.player.isPlaying ? "playing" : "stopped") \($0.player.time / 1000)s" }
+            print("DEBUG \(what): app wants \(Speakers.vlcDevice), test output running \(running()), players \(players)")
+        }
+        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
+        let files = ((try? FileManager.default.contentsOfDirectory(at: movies, includingPropertiesForKeys: nil)) ?? [])
+            .filter { MediaFiles.extensions.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.path < $1.path }
+        guard let g = app.debugGrids.first, files.count >= 2 else { print("DEBUG setup missing"); return }
+        at(1.0) {
+            plugIn()
+            print("DEBUG outputs: \(Speakers.outputs().map(\.name))")
+            g.tiles[0].setMuted(true)
+            g.tiles[0].playNow([files[0]])
+        }
+        at(2.5) { report("following macOS"); Prefs.setSpeakers(Speakers.outputs().first { $0.uid == testUID }) }
+        at(4.5) { report("test output chosen") }
+        at(5.0) { Prefs.setSpeakers(nil) }
+        at(7.0) { report("back to Same as macOS"); Prefs.setSpeakers(Speakers.outputs().first { $0.uid == testUID }) }
+        at(9.0) { report("chosen again"); unplug() }
+        at(11.0) { report("after unplugging") }
+        at(11.5) { plugIn() }
+        at(14.0) {
+            report("after plugging back in")
+            g.tiles[1].setMuted(true)
+            g.tiles[1].playNow([files[1]])       // a screen that starts playing later
+        }
+        at(16.5) { report("second screen playing") }
+        at(17.0) {
+            Prefs.setSpeakers(nil); unplug()
+            g.tiles[1].setMuted(false)
+            Prefs.muteOthersWhenMaximized = true
+            g.tileRequestsMaximizeToggle(g.tiles[0])
+            print("DEBUG maximized, silence on: muted \(g.tiles.prefix(3).map { $0.player.muted })")
+            Prefs.muteOthersWhenMaximized = false
+            print("DEBUG switched to keep sound: muted \(g.tiles.prefix(3).map { $0.player.muted })")
+            Prefs.muteOthersWhenMaximized = true
+            print("DEBUG switched back to silence: muted \(g.tiles.prefix(3).map { $0.player.muted })")
+            g.tileRequestsMaximizeToggle(g.tiles[0])
+            print("DEBUG back to grid: muted \(g.tiles.prefix(3).map { $0.player.muted })")
+            Prefs.muteOthersWhenMaximized = false
+            g.tileRequestsMaximizeToggle(g.tiles[0])
+            print("DEBUG maximized, keep sound: muted \(g.tiles.prefix(3).map { $0.player.muted })")
+        }
+        at(18.0) { NSApp.terminate(nil) }
     }
 }
 #endif
