@@ -60,8 +60,8 @@ It handles anything VLC can play (MKV, MP4, MOV, AVI, WebM, TS, and many more), 
 
 ### Settings
 *Video Grid → Settings…* (⌘,) has four pages:
-- **General:** dark, light, or system appearance, and whether each video shows its number and file name.
-- **Windows:** what happens at launch (resume where you left off, open your default windows, or ask for a layout), how many default windows to open, their layouts (the same for all or one each), and the most windows allowed at once.
+- **General:** dark, light, or system appearance, and whether each video shows its number and file name. What happens at launch: resume where you left off, open your default windows, or ask for a layout. It spells out what your default windows are, for example "2 windows with 9 videos in all. Window 1 is 2×2 (4 videos); Window 2 is XOO/XOO (5 videos, 1 of them bigger)". Also play statistics, which are off until you turn them on: how many times videos have played and played to the end, and your five most played videos. They're kept only on your Mac, and *Reset Statistics…* clears them.
+- **Windows:** your default windows: how many to open, their layouts (the same for all or one each) and a summary of the result. Also the most windows allowed at once.
 - **Playback:** repeat, random, and mute for new screens (with a button to apply them to every open screen), what dropping a video on a screen does, whether a maximized video silences the others or they keep playing, and which speakers to play through.
 - **File Browser:** names or thumbnails, left or right, the folder it starts in, and whether new windows show it.
 
@@ -134,6 +134,7 @@ The app is written in Swift and AppKit and talks to libVLC 3 through its C API. 
 | `Sources/Thumbnails.swift` | Video thumbnails: Quick Look first, then a frame grabbed by libVLC, cached on disk. |
 | `Sources/Settings.swift` | The preferences and the Settings window. |
 | `Sources/Speakers.swift` | Choosing the speakers, and following them as they're connected and disconnected. |
+| `Sources/Stats.swift` | The opt-in play statistics. |
 | `Sources/Session.swift` | Saving and resuming windows and playlists, and finding (or reconnecting) the file browser's starting folder. |
 | `Sources/LayoutPicker.swift`, `Support.swift` | The layout picker and pattern parsing. |
 | `Sources/DebugHarness.swift` | Test-only (`DEBUG=1 ./build.sh`): drives the app and saves pictures of the window. |

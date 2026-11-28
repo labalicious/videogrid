@@ -47,6 +47,8 @@ final class Player {
     private(set) var geometry: (size: CGSize, sar: CGFloat, transposed: Bool)?
     private var pendingSeek: Int64?
     private var endHandled = true
+    /// Set when a video is loaded; the first moment it's playing counts as a play in Stats.
+    private var countPlay = false
     private var hadVideoOutput = false
 
     var onPlaylistChanged: (() -> Void)?
@@ -133,6 +135,10 @@ final class Player {
             pendingSeek = nil
             libvlc_media_player_set_time(mp, s)
         }
+        if countPlay, let i = currentIndex, items.indices.contains(i) {
+            countPlay = false
+            Stats.recordPlay(items[i])
+        }
         onStartedPlaying?()
     }
 
@@ -144,8 +150,9 @@ final class Player {
 
     // MARK: Transport
 
-    func play(index: Int) {
+    func play(index: Int, countsAsPlay: Bool = true) {
         guard !released, items.indices.contains(index) else { return }
+        countPlay = countsAsPlay
         let changed = index != currentIndex
         currentIndex = index
         if changed {
@@ -276,9 +283,10 @@ final class Player {
 
     private func handleEnd() {
         guard let cur = currentIndex else { return }
+        Stats.recordFinished()
         if loopActive, let a = loopA {           // file ended before B: go round again
             pendingSeek = a
-            play(index: cur)
+            play(index: cur, countsAsPlay: false)
             return
         }
         switch repeatMode {

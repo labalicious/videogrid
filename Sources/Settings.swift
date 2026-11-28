@@ -75,6 +75,29 @@ enum Prefs {
         post()
     }
 
+    /// The default windows in words, e.g. "2 windows with 9 videos in all. Window 1 is 2×2 (4 videos);
+    /// Window 2 is XOO/XOO (5 videos, 1 of them bigger)". Reads after "opens".
+    static var defaultWindowsSummary: String {
+        let count = windowCount
+        let layouts = (0..<count).map { layout(forWindow: $0) }
+        let total = layouts.reduce(0) { $0 + $1.tiles.count }
+        if count == 1 { return "1 window, \(describe(layouts[0]))" }
+        let start = "\(count) windows with \(plural(total, "video")) in all"
+        if sameLayout { return "\(start), each \(describe(layouts[0]))" }
+        let each = layouts.enumerated().map { "Window \($0.offset + 1) is \(describe($0.element))" }
+        return "\(start). " + each.joined(separator: "; ")
+    }
+
+    private static func describe(_ l: GridLayout) -> String {
+        let big = l.tiles.filter { $0.rowSpan > 1 || $0.colSpan > 1 }.count
+        let videos = plural(l.tiles.count, "video")
+        return big == 0 ? "\(l.title) (\(videos))" : "\(l.pattern) (\(videos), \(big) of them bigger)"
+    }
+
+    static func plural(_ n: Int, _ word: String) -> String {
+        "\(n.formatted()) \(word)\(n == 1 ? "" : "s")"
+    }
+
     // MARK: Playback
 
     static var startMuted: Bool {
@@ -211,6 +234,7 @@ final class SettingsWindowController: NSWindowController {
         window.contentView = content
         NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Prefs.changed, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(prefsChanged), name: Speakers.changed, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(statsChanged), name: Stats.changed, object: nil)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -243,6 +267,9 @@ final class SettingsWindowController: NSWindowController {
             self?.rebuild()
         }
     }
+
+    /// Only the General page shows statistics.
+    @objc private func statsChanged() { if page == 0 { prefsChanged() } }
 
     private func rebuild() {
         guard let window else { return }
@@ -282,17 +309,83 @@ final class SettingsWindowController: NSWindowController {
             Prefs.look = [Prefs.Look.dark, .light, .system][$0]
         }
         let titles = checkbox("Show the number and file name on each video", Prefs.showTitles) { Prefs.showTitles = $0 }
-        return NSGridView(views: [
-            [label("Appearance:"), look],
-            [empty, titles],
-        ])
-    }
-
-    private func windowsPage() -> NSGridView {
         let launch = popup(["Resume where I left off", "Open my default windows", "Ask which layout to use"],
                            selected: [Prefs.Launch.resume, .defaults, .ask].firstIndex(of: Prefs.launch) ?? 2) {
             Prefs.launch = [Prefs.Launch.resume, .defaults, .ask][$0]
         }
+        let launchNote: String
+        switch Prefs.launch {
+        case .resume:
+            launchNote = "Reopens your windows with their playlists, each video where you left it. "
+                + "If there's nothing to resume, it opens \(Prefs.defaultWindowsSummary)."
+        case .defaults:
+            launchNote = "Opens \(Prefs.defaultWindowsSummary)."
+        case .ask:
+            launchNote = "Shows the layout picker, so you choose the grid each time."
+        }
+
+        var rows: [[NSView]] = [
+            [heading("Look"), empty],
+            [label("Appearance:"), look],
+            [empty, titles],
+            [heading("Opening"), empty],
+            [label("When Video Grid opens:"), launch],
+            [empty, note(launchNote)],
+        ]
+        if Prefs.launch != .ask {
+            rows.append([empty, button("Change Default Windows…") { [weak self] in self?.show(page: 1) }])
+        }
+        let statsHeading = rows.count
+        rows += [
+            [heading("Statistics"), empty],
+            [empty, checkbox("Keep play statistics", Stats.enabled) { Stats.enabled = $0 }],
+            [empty, note(Stats.enabled || Stats.isEmpty
+                ? "Counts the videos you play and which ones you play most. "
+                  + "It's kept only on this Mac and never sent anywhere."
+                : "Turned off, so nothing new is counted. What's here stays until you reset it.")],
+        ]
+        if Stats.enabled || !Stats.isEmpty {
+            var played = Prefs.plural(Stats.plays, "time")
+            if let since = Stats.since { played += " since " + since.formatted(date: .abbreviated, time: .omitted) }
+            let top = Stats.mostPlayed(5).enumerated().map { i, v in
+                "\(i + 1).  \(Self.shortName(v.url.lastPathComponent)), \(Prefs.plural(v.plays, "play"))"
+            }
+            let list = NSTextField(labelWithString: top.isEmpty ? "Nothing yet" : top.joined(separator: "\n"))
+            list.toolTip = Stats.mostPlayed(5).map(\.url.path).joined(separator: "\n")
+            if top.isEmpty { list.textColor = .secondaryLabelColor }
+            let reset = button("Reset Statistics…") { [weak self] in self?.confirmResetStats() }
+            reset.isEnabled = !Stats.isEmpty
+            rows += [
+                [label("Videos played:"), NSTextField(labelWithString: played)],
+                [label("Played to the end:"), NSTextField(labelWithString: Prefs.plural(Stats.finished, "time"))],
+                [label("Most played:"), list],
+                [empty, reset],
+            ]
+        }
+        let grid = NSGridView(views: rows)
+        for r in [0, 3, statsHeading] { headingRow(grid, r) }
+        return grid
+    }
+
+    /// Keeps long file names from stretching the window: "A very long na…me.mp4".
+    private static func shortName(_ s: String, max: Int = 46) -> String {
+        guard s.count > max else { return s }
+        let half = (max - 1) / 2
+        return s.prefix(half) + "…" + s.suffix(max - 1 - half)
+    }
+
+    private func confirmResetStats() {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Reset your play statistics?"
+        alert.informativeText = "This clears the counts and the most played list. It can't be undone."
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { r in if r == .alertFirstButtonReturn { Stats.reset() } }
+    }
+
+    private func windowsPage() -> NSGridView {
         let max = Prefs.maxWindows
         let count = popup((1...max).map { $0 == 1 ? "1 window" : "\($0) windows" }, selected: Prefs.windowCount - 1) {
             Prefs.windowCount = $0 + 1
@@ -304,9 +397,6 @@ final class SettingsWindowController: NSWindowController {
         let different = radio("A different layout for each window", !Prefs.sameLayout) { Prefs.sameLayout = false }
 
         var rows: [[NSView]] = [
-            [label("When Video Grid opens:"), launch],
-            [empty, note("Resume reopens your windows with their playlists, each video where you left it. "
-                         + "If there's nothing to resume, your default windows open.")],
             [heading("Default windows"), empty],
             [label("Open:"), count],
             [label("Layouts:"), same],
@@ -317,13 +407,20 @@ final class SettingsWindowController: NSWindowController {
         } else {
             for i in 0..<Prefs.windowCount { rows.append([label("Window \(i + 1):"), layoutPopup(forWindow: i)]) }
         }
+        let used: String
+        switch Prefs.launch {
+        case .defaults: used = "They open every time Video Grid starts."
+        case .resume: used = "They open when Video Grid starts with nothing to resume."
+        case .ask: used = "They aren't used right now: General is set to ask which layout to use when Video Grid opens."
+        }
+        rows.append([empty, note("That's \(Prefs.defaultWindowsSummary). " + used)])
         rows += [
             [heading("Limit"), empty],
             [label("Allow up to:"), limit],
             [empty, note("File → New Grid Window (⌘N) opens more windows, up to this number.")],
         ]
         let grid = NSGridView(views: rows)
-        for r in [2, rows.count - 3] { headingRow(grid, r) }
+        for r in [0, rows.count - 3] { headingRow(grid, r) }
         return grid
     }
 
